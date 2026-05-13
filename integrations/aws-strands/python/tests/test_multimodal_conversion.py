@@ -286,10 +286,20 @@ class TestMimeToFormat:
         assert result == []
 
     def test_missing_mime_skips_image_block(self):
-        """An image with no MIME type should be skipped entirely."""
+        """An image whose source MIME is unavailable at conversion time should be skipped.
+
+        The current ``ag-ui-protocol`` schema marks ``mime_type`` as required on
+        ``InputContentDataSource``, so we can no longer construct one without it.
+        Simulate "no MIME available" at the adapter boundary by stripping the
+        attribute off an otherwise-valid source and re-checking that the
+        adapter yields no blocks. This keeps coverage of the defensive branch
+        in ``_mime_to_format`` that returns ``None`` on falsy MIME values.
+        """
         raw_bytes = b"fake-image-data"
         b64_value = base64.b64encode(raw_bytes).decode()
-        source = InputContentDataSource(value=b64_value)
+        source = InputContentDataSource(value=b64_value, mime_type="image/png")
+        # Emulate an upstream change that dropped the MIME after construction.
+        object.__setattr__(source, "mime_type", None)
         content = [ImageInputContent(source=source)]
 
         result = convert_agui_content_to_strands(content)

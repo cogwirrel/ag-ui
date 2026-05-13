@@ -12,9 +12,19 @@ logger = logging.getLogger(__name__)
 def create_model():
     """Create a Strands model based on MODEL_PROVIDER env var.
 
-    Supported providers: openai (default), anthropic, gemini
+    Supported providers: bedrock (default), openai, anthropic, gemini
     """
-    provider = os.getenv("MODEL_PROVIDER", "openai").lower()
+    provider = os.getenv("MODEL_PROVIDER", "bedrock").lower()
+
+    if provider == "bedrock":
+        from strands.models.bedrock import BedrockModel
+        return BedrockModel(
+            # Match the Strands TypeScript SDK's default Bedrock model
+            # (defaults.ts: `global.anthropic.claude-sonnet-4-6`) so the
+            # Python and TS example servers produce comparable output.
+            model_id=os.getenv("MODEL_ID", "global.anthropic.claude-sonnet-4-6"),
+            region_name=os.getenv("AWS_REGION", "us-west-2"),
+        )
 
     if provider == "openai":
         api_key = os.getenv("OPENAI_API_KEY")
@@ -69,4 +79,6 @@ def create_model():
             }
         )
     else:
-        raise ValueError(f"Unknown MODEL_PROVIDER: {provider}. Supported: openai, anthropic, gemini")
+        raise ValueError(
+            f"Unknown MODEL_PROVIDER: {provider}. Supported: bedrock, openai, anthropic, gemini"
+        )

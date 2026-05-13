@@ -4,9 +4,10 @@ This package exposes a lightweight wrapper that lets any `strands.Agent` speak t
 
 ## Prerequisites
 
-- Python 3.10+
+- Python 3.12 or 3.13 (pinned to `<3.14`)
 - `poetry` (recommended) or `pip`
-- A Strands-compatible model key (e.g., `GOOGLE_API_KEY` for Gemini)
+- A Strands-compatible model backend: AWS credentials for Bedrock (default),
+  or an API key for OpenAI / Anthropic / Gemini
 
 ## Quick Start
 
@@ -20,12 +21,15 @@ poetry run python -m server
 
 It exposes:
 
-| Route                     | Description                  |
-| ------------------------- | ---------------------------- |
-| `/agentic-chat`           | Frontend tool demo           |
-| `/backend-tool-rendering` | Backend tool rendering demo  |
-| `/shared-state`           | Shared recipe state          |
-| `/agentic-generative-ui`  | Agentic UI with PredictState |
+| Route                       | Description                                         |
+| --------------------------- | --------------------------------------------------- |
+| `/agentic-chat`             | Baseline chat with frontend-only tool registration  |
+| `/agentic-chat-reasoning`   | Reasoning / thinking event streaming                |
+| `/agentic-chat-multimodal`  | Multimodal image / document analysis                |
+| `/backend-tool-rendering`   | Backend-executed tools (`get_weather`, `render_chart`) |
+| `/shared-state`             | Shared recipe state with `state_from_args`          |
+| `/agentic-generative-ui`    | Async-generator tool streaming state + `PredictState` |
+| `/human-in-the-loop`        | Frontend proxy tool with halt-after-call            |
 
 This is the easiest way to test multiple flows locally. Each route still follows the pattern described below (Strands agent → wrapper → FastAPI).
 
@@ -95,8 +99,3 @@ The integration supports the following AG-UI event families:
 - **Multi-agent**: `STEP_STARTED`, `STEP_FINISHED`, and `MultiAgentHandoff` custom events
 - **Generative UI**: `PredictState` custom events for optimistic UI updates
 - **Multimodal**: Image, document, and video content in user messages (converted to Strands ContentBlock format)
-
-## Next Steps
-
-- Add an event queue layer (like the ADK middleware) for resumable streams and non-HTTP transports.
-- Expand the test suite as new behaviors land.
