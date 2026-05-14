@@ -293,6 +293,21 @@ export const menuIntegrations = [
     ],
   },
   {
+    id: "aws-strands-typescript",
+    name: "AWS Strands (TypeScript)",
+    features: [
+      "agentic_chat",
+      "agentic_chat_reasoning",
+      "agentic_chat_multimodal",
+      "v1_agentic_chat",
+      "backend_tool_rendering",
+      "agentic_generative_ui",
+      "shared_state",
+      "human_in_the_loop",
+      "tool_based_generative_ui",
+    ],
+  },
+  {
     id: "claude-agent-sdk-python",
     name: "Claude Agent SDK (Python)",
     features: [
