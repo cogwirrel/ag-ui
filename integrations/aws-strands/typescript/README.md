@@ -20,7 +20,7 @@ pnpm install
 pnpm --filter @ag-ui/aws-strands build
 
 cd integrations/aws-strands/typescript/examples
-pnpm dojo                       # all examples at http://localhost:8002
+pnpm dojo                       # all examples at http://localhost:8022
 ```
 
 Or run any single example on its own port (default `8000`):
@@ -148,16 +148,15 @@ Connect MCP clients first and spread the resolved tools into `tools`:
 import { Agent } from "@strands-agents/sdk";
 import { McpClient } from "@strands-agents/sdk/mcp";
 
-const spellbook = new McpClient({ /* transport config */ });
+const spellbook = new McpClient({
+  /* transport config */
+});
 await spellbook.connect();
 const mcpTools = await spellbook.listTools();
 
 const agent = new Agent({
   model: "anthropic.claude-sonnet-4-5-20250929-v1:0",
-  tools: [
-    ...mcpTools,
-    myLocalTool,
-  ],
+  tools: [...mcpTools, myLocalTool],
 });
 
 const aguiAgent = new StrandsAgent({ agent });

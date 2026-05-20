@@ -106,6 +106,98 @@ describe("replayHistoryIntoStrands", () => {
     );
   });
 
+  it("decodes JSON tool result content into a JsonBlock so the LLM sees structure", async () => {
+    // Frontends (e.g. CopilotKit useHumanInTheLoop's `respond({...})`) JSON-
+    // encode structured results before transport. Forwarding the raw string as
+    // a TextBlock leaves the model with the original toolUse.input and an
+    // opaque text payload — the model then ignores the user's selection and
+    // re-lists the original args. Emit `{json: parsed}` so the result wins.
+    const { stub, calls } = recordingAgent();
+    const agent = makeAgent(stub);
+    const toolResult = JSON.stringify({
+      accepted: true,
+      steps: [
+        { description: "Crack eggs", status: "enabled" },
+        { description: "Mix batter", status: "enabled" },
+      ],
+    });
+    await collect(
+      agent,
+      minimalRunInput({
+        messages: [
+          { id: "u1", role: "user", content: "plan brownies" },
+          {
+            id: "a1",
+            role: "assistant",
+            content: "",
+            toolCalls: [
+              {
+                id: "tc1",
+                type: "function",
+                function: {
+                  name: "generate_task_steps",
+                  arguments: '{"steps":[]}',
+                },
+              },
+            ],
+          },
+          { id: "t1", role: "tool", content: toolResult, toolCallId: "tc1" },
+        ],
+      }),
+    );
+    const history = calls[0]!.messages as Array<{
+      role: string;
+      content: unknown[];
+    }>;
+    const toolResultBlock = history[2]!.content[0] as {
+      type: string;
+      content: Array<{ type: string; text?: string; json?: unknown }>;
+    };
+    expect(toolResultBlock.type).toBe("toolResultBlock");
+    expect(toolResultBlock.content).toHaveLength(1);
+    const inner = toolResultBlock.content[0]!;
+    expect(inner.type).toBe("jsonBlock");
+    expect(inner.json).toEqual({
+      accepted: true,
+      steps: [
+        { description: "Crack eggs", status: "enabled" },
+        { description: "Mix batter", status: "enabled" },
+      ],
+    });
+  });
+
+  it("falls back to a TextBlock when tool result content is not JSON", async () => {
+    const { stub, calls } = recordingAgent();
+    const agent = makeAgent(stub);
+    await collect(
+      agent,
+      minimalRunInput({
+        messages: [
+          { id: "u1", role: "user", content: "do x" },
+          {
+            id: "a1",
+            role: "assistant",
+            content: "",
+            toolCalls: [
+              {
+                id: "tc1",
+                type: "function",
+                function: { name: "do_x", arguments: "{}" },
+              },
+            ],
+          },
+          { id: "t1", role: "tool", content: "plain ack", toolCallId: "tc1" },
+        ],
+      }),
+    );
+    const history = calls[0]!.messages as Array<{ content: unknown[] }>;
+    const toolResultBlock = history[2]!.content[0] as {
+      content: Array<{ type: string; text?: string }>;
+    };
+    expect(toolResultBlock.content[0]!.type).toBe("textBlock");
+    expect(toolResultBlock.content[0]!.text).toBe("plain ack");
+  });
+
   it("is disabled when replayHistoryIntoStrands=false", async () => {
     const { stub, calls } = recordingAgent();
     const agent = makeAgent(stub, { replayHistoryIntoStrands: false });

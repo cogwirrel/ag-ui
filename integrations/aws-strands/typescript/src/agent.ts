@@ -153,6 +153,41 @@ function _coerceText(content: unknown): string {
   return String(content);
 }
 
+/**
+ * Build a Strands `toolResult` content block from an AG-UI tool message body.
+ *
+ * AG-UI's wire shape requires `ToolMessage.content` to be a string. Frontends
+ * (e.g. CopilotKit's `useHumanInTheLoop`) typically JSON-encode structured
+ * results before transport, so the string the adapter receives looks like
+ * `'{"accepted":true,"steps":[...]}'`. Forwarding that as a `text` block leaves
+ * the LLM with two competing payloads: the original `toolUse.input` (full
+ * args) and an opaque-looking JSON string in the result. The model often
+ * defaults to the args.
+ *
+ * Strands' `ToolResultContentData` accepts a `JsonBlock` shape (see
+ * `@strands-agents/sdk` `messages.ts`). When the message content parses as a
+ * JSON object/array, emit it as `{ json: parsed }` so the LLM sees a real
+ * structured result. Fall back to `{ text: ... }` for everything else.
+ */
+function _buildToolResultContent(
+  content: unknown,
+): { text: string } | { json: unknown } {
+  const text = _coerceText(content);
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return { text };
+  const first = trimmed[0];
+  if (first !== "{" && first !== "[") return { text };
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed !== null && typeof parsed === "object") {
+      return { json: parsed };
+    }
+  } catch {
+    // Not valid JSON — fall through to text.
+  }
+  return { text };
+}
+
 /** Return ``value`` if it is a non-empty string, else a fresh UUID. */
 function _coerceId(value: unknown): string {
   return typeof value === "string" && value.length > 0 ? value : uuid();
@@ -336,7 +371,7 @@ async function _buildStrandsHistory(
           {
             toolResult: {
               toolUseId: toolCallId,
-              content: [{ text: _coerceText(msg.content) }],
+              content: [_buildToolResultContent(msg.content)],
               status: "success" as const,
             },
           },

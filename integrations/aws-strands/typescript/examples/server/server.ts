@@ -52,7 +52,7 @@ async function main(): Promise<void> {
 
   /* ---------------- agentic-chat-reasoning ---------------- */
   const reasoningAgent = new Agent({
-    model: await createModel(),
+    model: await createModel({ reasoning: true }),
     systemPrompt: `
       You are a helpful assistant that thinks through problems step by step.
       When reasoning about a problem, break it down into clear steps before answering.
@@ -144,6 +144,16 @@ async function main(): Promise<void> {
     },
     toolBehaviors: {
       generate_recipe: {
+        // Stream the recipe arg into state.recipe while the LLM is still
+        // emitting it, so the UI fills in progressively. Mirrors the
+        // langgraph shared-state demo's predict_state mapping.
+        predictState: [
+          {
+            stateKey: "recipe",
+            tool: "generate_recipe",
+            toolArgument: "recipe",
+          },
+        ],
         stateFromArgs: async (ctx) => {
           const args = ctx.toolInput as { recipe?: unknown };
           return args?.recipe ? { recipe: args.recipe } : null;
@@ -284,7 +294,7 @@ Do not respond with plain text — always use the tool.`,
     }),
   );
 
-  const port = Number(process.env.PORT ?? 8002);
+  const port = Number(process.env.PORT ?? 8022);
   const host = process.env.HOST ?? "0.0.0.0";
   app.listen(port, host, () => {
     console.log(`TS strands server listening on ${host}:${port}`);

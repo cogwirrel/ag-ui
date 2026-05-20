@@ -13,7 +13,7 @@ import { createModel } from "../model-factory";
 
 async function main(): Promise<void> {
   const strandsAgent = new Agent({
-    model: await createModel(),
+    model: await createModel({ reasoning: true }),
     systemPrompt: `
     You are a helpful assistant that thinks through problems step by step.
     When the user greets you, always greet them back. Your greeting should always start with "Hello".

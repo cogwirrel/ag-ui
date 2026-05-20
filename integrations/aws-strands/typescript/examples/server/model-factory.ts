@@ -6,13 +6,32 @@
  * runner injects `OPENAI_BASE_URL=http://localhost:5555/v1` + a mock API key,
  * so the default `openai` provider routes to the aimock server automatically.
  *
+ * Reasoning summaries are opt-in via `{ reasoning: true }`. Mirrors the
+ * mastra/langgraph TS dojos, where only the `agentic-chat-reasoning` demo
+ * configures a reasoning model. Leaving reasoning on by default produces
+ * `reasoningBlock` content in assistant turns that the OpenAI Responses API
+ * cannot replay across multi-turn conversations, which breaks any demo that
+ * triggers a tool-use loop (e.g. `tool-based-generative-ui`).
+ *
  * Supported providers: `openai` (default), `anthropic`, `gemini`, `bedrock`.
  */
 
 import type { Model } from "@strands-agents/sdk";
 
-export async function createModel(): Promise<Model> {
+export interface CreateModelOptions {
+  /**
+   * Request reasoning/thinking content from the provider. Defaults to `false`.
+   * Only enable for demos that explicitly render reasoning in the UI — the
+   * Responses API drops reasoning blocks across multi-turn conversations.
+   */
+  reasoning?: boolean;
+}
+
+export async function createModel(
+  options: CreateModelOptions = {},
+): Promise<Model> {
   const provider = (process.env.MODEL_PROVIDER ?? "openai").toLowerCase();
+  const reasoning = options.reasoning ?? false;
 
   if (provider === "openai") {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -30,9 +49,9 @@ export async function createModel(): Promise<Model> {
     return new OpenAIModel({
       apiKey,
       modelId: process.env.MODEL_ID ?? "gpt-5.4",
-      params: {
-        reasoning: { effort: "medium", summary: "auto" },
-      },
+      ...(reasoning
+        ? { params: { reasoning: { effort: "medium", summary: "auto" } } }
+        : {}),
       ...(baseURL ? { clientConfig: { baseURL } } : {}),
     });
   }

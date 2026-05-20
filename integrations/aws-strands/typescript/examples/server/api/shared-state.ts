@@ -61,6 +61,18 @@ async function main(): Promise<void> {
     },
     toolBehaviors: {
       generate_recipe: {
+        // Stream the LLM's incremental `recipe` arg JSON into `state.recipe`
+        // so the UI fills in fields progressively. Without this, the FE has
+        // nothing to render until contentBlockStop fires `stateFromArgs`,
+        // and the recipe pops in as a single bulk update. Mirrors the
+        // langgraph shared-state demo (predict_state with state_key=recipe).
+        predictState: [
+          {
+            stateKey: "recipe",
+            tool: "generate_recipe",
+            toolArgument: "recipe",
+          },
+        ],
         stateFromArgs: async (ctx) => {
           const args = ctx.toolInput as { recipe?: unknown };
           return args?.recipe ? { recipe: args.recipe } : null;
