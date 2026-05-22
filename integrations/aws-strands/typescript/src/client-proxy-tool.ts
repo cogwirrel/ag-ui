@@ -33,9 +33,17 @@ interface ProxyTool extends Tool {
  * tools registered at server startup via an internal symbol marker.
  */
 export function createProxyTool(tool: AguiTool): Tool {
+  // Strands' tool registry rejects empty-string descriptions, and Bedrock
+  // requires a non-empty description on every tool spec. Frontend tools
+  // routed through CopilotKit don't always provide one, so synthesise a
+  // minimal placeholder from the tool name when missing.
+  const description =
+    tool.description && tool.description.length > 0
+      ? tool.description
+      : `Client-side tool: ${tool.name}`;
   const spec: ToolSpec = {
     name: tool.name,
-    description: tool.description ?? "",
+    description,
     inputSchema: (tool.parameters ?? {
       type: "object",
       properties: {},
@@ -43,7 +51,7 @@ export function createProxyTool(tool: AguiTool): Tool {
   };
   const proxy: ProxyTool = {
     name: spec.name,
-    description: spec.description ?? "",
+    description,
     toolSpec: spec,
     [PROXY_MARKER]: true,
     // `yield` is deliberately omitted — the adapter filters the placeholder

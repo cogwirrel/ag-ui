@@ -85,27 +85,45 @@ async function main(): Promise<void> {
   );
 
   /* ---------------- backend-tool-rendering ---------------- */
+  // Schema mirrors python/examples/server/api/backend_tool_rendering.py so
+  // the dojo's WeatherCard (which reads `location` from args and
+  // `wind_speed` / `feels_like` from the result) renders identically.
   const getWeather = tool({
     name: "get_weather",
-    description: "Gets the current weather for a given city.",
+    description: "Get weather information for a location.",
     inputSchema: z.object({
-      city: z.string().describe("The city to fetch weather for."),
+      location: z.string().describe("The location to get weather for."),
     }),
-    callback: ({ city }) => ({ city, temperatureC: 21, conditions: "Sunny" }),
+    callback: () => {
+      const conditions = ["sunny", "cloudy", "rainy", "clear", "partly cloudy"];
+      const rand = (lo: number, hi: number) =>
+        Math.floor(Math.random() * (hi - lo + 1)) + lo;
+      return {
+        temperature: rand(60, 85),
+        conditions: conditions[rand(0, conditions.length - 1)],
+        humidity: rand(30, 80),
+        wind_speed: rand(5, 20),
+        feels_like: rand(58, 88),
+      };
+    },
   });
   const renderChart = tool({
     name: "render_chart",
-    description: "Renders a chart for the given data series.",
+    description: "Render a chart with backend processing capabilities.",
     inputSchema: z.object({
-      title: z.string(),
-      points: z.array(z.object({ x: z.number(), y: z.number() })),
+      chart_type: z.string(),
+      data: z.string(),
     }),
-    callback: (input) => ({ rendered: true, ...input }),
+    callback: ({ chart_type, data }) => ({
+      chart_type,
+      data: data.slice(0, 100),
+      status: "rendered",
+    }),
   });
   const backendToolAgent = new Agent({
     model: await createModel(),
     systemPrompt:
-      "You are a helpful assistant. Use the tools to answer user questions, then narrate the result.",
+      "You are a helpful assistant with backend tool rendering capabilities. You can get weather information and render charts.",
     tools: [getWeather, renderChart],
   });
   mountAgent(
@@ -257,8 +275,25 @@ async function main(): Promise<void> {
   const hitlAgent = new Agent({
     model: await createModel(),
     tools: [],
-    systemPrompt:
-      "You are a task planner. Always use generate_task_steps exactly once with 10 imperative-form steps.",
+    systemPrompt: `You are a task planning assistant specialized in creating clear, actionable step-by-step plans.
+
+**Your Primary Role:**
+- Break down any user request into exactly 10 clear, actionable steps (unless the user explicitly asks for fewer)
+- Each step should be brief, in imperative form (e.g., "Dig hole", "Open door", "Mix ingredients")
+- Set all steps to "enabled" status initially
+
+**When the user asks you to plan something:**
+1. Use the \`generate_task_steps\` tool exactly once
+2. Wait for the user's review
+
+**When the user replies after reviewing the plan:**
+- If accepted: briefly confirm the approved steps and "execute" them by repeating each in gerund form (e.g., "Digging hole... Opening door...") — DO NOT call \`generate_task_steps\` again
+- If rejected: ask what they'd like to change — DO NOT call \`generate_task_steps\` again until they provide new input
+
+**Important:**
+- NEVER call \`generate_task_steps\` twice in a row without explicit new user input
+- For follow-up questions about a previously executed plan, just answer in plain text — do NOT invoke any tool
+`,
   });
   mountAgent(
     app,

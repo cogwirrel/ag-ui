@@ -61,6 +61,19 @@ describe("createProxyTool", () => {
     const tool = createProxyTool(aguiTool("x"));
     expect(isProxyTool(tool)).toBe(true);
   });
+
+  it("synthesises a description when the AG-UI tool omits one", () => {
+    // CopilotKit's useFrontendTool doesn't require a description; Strands'
+    // tool registry rejects empty descriptions, so the proxy must fill in.
+    const tool = createProxyTool({
+      name: "generate_haiku",
+      description: "",
+      parameters: { type: "object", properties: {} },
+    });
+    expect(tool.description.length).toBeGreaterThan(0);
+    expect(tool.toolSpec.description.length).toBeGreaterThan(0);
+    expect(tool.description).toContain("generate_haiku");
+  });
 });
 
 describe("syncProxyTools", () => {
