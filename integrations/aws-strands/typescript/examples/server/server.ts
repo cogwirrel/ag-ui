@@ -121,9 +121,9 @@ async function main(): Promise<void> {
   /* ---------------- shared-state ---------------- */
   const recipeSchema = z.object({
     title: z.string(),
-    skillLevel: z.string(),
-    specialPreferences: z.array(z.string()),
-    cookingTime: z.string(),
+    skill_level: z.string(),
+    special_preferences: z.array(z.string()),
+    cooking_time: z.string(),
     ingredients: z.array(
       z.object({ icon: z.string(), name: z.string(), amount: z.string() }),
     ),

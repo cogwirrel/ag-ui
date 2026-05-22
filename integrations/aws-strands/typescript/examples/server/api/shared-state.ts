@@ -13,9 +13,9 @@ import { createModel } from "../model-factory";
 
 const recipeSchema = z.object({
   title: z.string(),
-  skillLevel: z.string(),
-  specialPreferences: z.array(z.string()),
-  cookingTime: z.string(),
+  skill_level: z.string(),
+  special_preferences: z.array(z.string()),
+  cooking_time: z.string(),
   ingredients: z.array(
     z.object({ icon: z.string(), name: z.string(), amount: z.string() }),
   ),
@@ -35,9 +35,9 @@ const generateRecipe = tool({
 
 const initialRecipe = {
   title: "Make Your Recipe",
-  skillLevel: "Intermediate",
-  specialPreferences: [] as string[],
-  cookingTime: "45 min",
+  skill_level: "Intermediate",
+  special_preferences: [] as string[],
+  cooking_time: "45 min",
   ingredients: [
     { icon: "🥕", name: "Carrots", amount: "3 large, grated" },
     { icon: "🌾", name: "All-Purpose Flour", amount: "2 cups" },
