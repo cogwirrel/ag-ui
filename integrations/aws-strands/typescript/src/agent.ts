@@ -1455,8 +1455,17 @@ export class StrandsAgent {
           // `"message" in event and event["message"]["role"] == "user"` branch.
           if (kind === "afterToolCallEvent") {
             if (pendingHalt) {
+              // Frontend tool: the proxy "Forwarded to client" placeholder has
+              // resolved and we don't want to feed it back to the model. Abort
+              // the Strands stream so the LLM stops emitting another cycle and
+              // we can finalise RUN_FINISHED.
               haltEventStream = true;
-              continue;
+              try {
+                runAbort.abort();
+              } catch {
+                // ignore
+              }
+              break;
             }
             const hookEvent = event as unknown as {
               toolUse: { toolUseId: string; name: string };
