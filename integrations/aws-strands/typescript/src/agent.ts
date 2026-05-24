@@ -95,18 +95,14 @@ function _extractTemplateFields(
   agent: StrandsAgentCore,
 ): TemplateAgentCloneFields {
   const model = agent.model;
-  const modelId = model?.modelId;
-  // Only pass `modelId` as a string when the template uses BedrockModel —
-  // that's Strands' one string-coercion path. Other providers must keep
-  // their Model instance or `new Agent({ model: "..." })` rebuilds them as
-  // BedrockModel and inference fails with "provided model identifier is
-  // invalid".
-  const isBedrock =
-    model != null &&
-    typeof model === "object" &&
-    model.constructor?.name === "BedrockModel";
+  // Forward the existing Model instance to per-thread clones so that any
+  // provider-specific config the caller set on the template (e.g. Bedrock
+  // `additionalRequestFields.thinking`, `temperature`, guardrails) is
+  // preserved. Strands also accepts `model: string` and rebuilds a
+  // BedrockModel from it, but that path discards every other field — which
+  // silently breaks reasoning, guardrails, and per-model tuning.
   const fields: TemplateAgentCloneFields = {
-    model: isBedrock && modelId ? modelId : model,
+    model,
     tools: agent.tools.slice(),
   };
   if (agent.systemPrompt !== undefined)

@@ -174,4 +174,34 @@ describe("AgentConfig forwarding", () => {
     expect(cfg.name).toBe("my-template-agent");
     expect(cfg.plugins).toEqual([plugin]);
   });
+
+  it("forwards the Model instance, preserving provider-specific config like Bedrock thinking", async () => {
+    // Regression: a previous string-coercion path replaced any BedrockModel
+    // instance with just `model.modelId`, silently discarding
+    // `additionalRequestFields.thinking`, `temperature`, and guardrails. That
+    // broke /agentic-chat-reasoning end-to-end (zero REASONING_* events).
+    capturedConfigs.length = 0;
+    class FakeBedrockModel {
+      readonly modelId = "global.anthropic.claude-sonnet-4-6";
+      readonly temperature = 1;
+      readonly additionalRequestFields = {
+        thinking: { type: "enabled", budget_tokens: 2000 },
+      };
+    }
+    Object.defineProperty(FakeBedrockModel, "name", { value: "BedrockModel" });
+    const tpl = {
+      ...richTemplate(),
+      model: new FakeBedrockModel(),
+    } as unknown as import("@strands-agents/sdk").Agent;
+    const sa = new StrandsAgent({ agent: tpl, name: "t" });
+    await collect(sa);
+    const cfg = capturedConfigs.at(-1)!;
+    expect(cfg.model).toBeInstanceOf(FakeBedrockModel);
+    expect(
+      (cfg.model as unknown as FakeBedrockModel).additionalRequestFields,
+    ).toEqual({
+      thinking: { type: "enabled", budget_tokens: 2000 },
+    });
+    expect((cfg.model as unknown as FakeBedrockModel).temperature).toBe(1);
+  });
 });
