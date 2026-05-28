@@ -64,81 +64,38 @@ interface StrandsOrchestrator {
 }
 
 /**
- * Fields cloned from the caller-supplied template Agent into every per-thread
- * Agent. Mirrors Python's `_extract_agent_kwargs`. Deliberately NOT forwarded:
- *   - sessionManager: supplied per-thread via sessionManagerProvider.
- *   - plugins: supplied explicitly via StrandsAgentOptions.plugins.
- *   - conversationManager: bound to template state; sharing across threads
- *     would share conversation-window state. Rely on Strands' default.
- *   - messages: per-thread agents start empty; AG-UI delivers at runtime.
- *   - hooks: Strands' HookRegistry ephemeral state, not forwarded.
+ * Per-thread clone overrides forwarded to `StrandsAgentCore.clone(...)`.
+ *
+ * Inlined here rather than imported from the SDK so the adapter stays
+ * compatible with SDK builds whose `CloneOptions` shape predates the
+ * unified `overrides` field. Detection of clone() support is structural
+ * (see `_getClone`).
  */
-interface TemplateAgentCloneFields {
-  model: AgentConfig["model"];
-  tools: StrandsAgentCore["tools"];
-  systemPrompt?: AgentConfig["systemPrompt"];
-  name?: string;
-  description?: string;
-  id?: string;
-  appState?: Record<string, JSONValue>;
-  modelState?: Record<string, JSONValue>;
-  traceAttributes?: AgentConfig["traceAttributes"];
-  structuredOutputSchema?: AgentConfig["structuredOutputSchema"];
-  toolExecutor?: AgentConfig["toolExecutor"];
+interface AdapterCloneOptions {
+  overrides?: {
+    sessionManager?: SessionManager;
+    messages?: AgentConfig["messages"];
+    printer?: boolean;
+  };
+  additionalPlugins?: Plugin[];
 }
 
+type CloneFn = (options?: AdapterCloneOptions) => StrandsAgentCore;
+
 /**
- * Extract every forwardable field from the template Agent into per-thread
- * clones. Mirrors Python's ``_extract_agent_kwargs``.
+ * Returns the bound `clone` method when the template exposes one,
+ * otherwise `undefined`. This lets the adapter cleanly support older
+ * `@strands-agents/sdk` versions without `Agent.clone` — they fall
+ * through to the legacy slice-and-rebuild path in `_buildThreadAgent`.
  */
-function _extractTemplateFields(
-  agent: StrandsAgentCore,
-): TemplateAgentCloneFields {
-  const model = agent.model;
-  // Forward the existing Model instance to per-thread clones so that any
-  // provider-specific config the caller set on the template (e.g. Bedrock
-  // `additionalRequestFields.thinking`, `temperature`, guardrails) is
-  // preserved. Strands also accepts `model: string` and rebuilds a
-  // BedrockModel from it, but that path discards every other field — which
-  // silently breaks reasoning, guardrails, and per-model tuning.
-  const fields: TemplateAgentCloneFields = {
-    model,
-    tools: agent.tools.slice(),
-  };
-  if (agent.systemPrompt !== undefined)
-    fields.systemPrompt = agent.systemPrompt;
-  // Strands defaults `name` to "Strands Agent" and `id` to "agent" when the
-  // caller doesn't set them — forward them unconditionally so the per-thread
-  // agent matches the template regardless of whether the default or an
-  // override was used.
-  if (agent.name !== undefined) fields.name = agent.name;
-  if (agent.id !== undefined) fields.id = agent.id;
-  if (agent.description !== undefined) fields.description = agent.description;
-  // appState / modelState are StateStore instances; serialize to plain dicts.
-  const appStateDump = (
-    agent.appState as { getAll?: () => Record<string, JSONValue> }
-  )?.getAll?.();
-  if (appStateDump && Object.keys(appStateDump).length > 0)
-    fields.appState = appStateDump;
-  const modelStateDump = (
-    agent.modelState as { getAll?: () => Record<string, JSONValue> }
-  )?.getAll?.();
-  if (modelStateDump && Object.keys(modelStateDump).length > 0)
-    fields.modelState = modelStateDump;
-  // These aren't exposed via the Agent's public accessors in all SDK versions;
-  // read them optimistically and forward only when set.
-  const extra = agent as unknown as {
-    traceAttributes?: AgentConfig["traceAttributes"];
-    structuredOutputSchema?: AgentConfig["structuredOutputSchema"];
-    toolExecutor?: AgentConfig["toolExecutor"];
-  };
-  if (extra.traceAttributes !== undefined)
-    fields.traceAttributes = extra.traceAttributes;
-  if (extra.structuredOutputSchema !== undefined)
-    fields.structuredOutputSchema = extra.structuredOutputSchema;
-  if (extra.toolExecutor !== undefined)
-    fields.toolExecutor = extra.toolExecutor;
-  return fields;
+function _getClone(agent: StrandsAgentCore): CloneFn | undefined {
+  const candidate = (
+    agent as unknown as {
+      clone?: (options?: AdapterCloneOptions) => StrandsAgentCore;
+    }
+  ).clone;
+  if (typeof candidate !== "function") return undefined;
+  return candidate.bind(agent);
 }
 
 /** Best-effort string view of an AG-UI message content field. */
@@ -399,8 +356,14 @@ export interface StrandsAgentOptions {
    * adapter (observability, loop caps, policy checks, ...). Mirrors the
    * Python adapter's `hooks=` kwarg. Ignored when `agent` is a multi-agent
    * orchestrator.
+   *
+   * Each entry may be a `Plugin` instance (shared across threads) or a
+   * `() => Plugin` factory invoked once per thread to build a fresh
+   * instance. Use the factory form for plugins that hold per-agent state
+   * (counters, debounce timers, in-flight buffers) — sharing one instance
+   * across concurrent threads would let their state collide.
    */
-  plugins?: Plugin[];
+  plugins?: Array<Plugin | (() => Plugin)>;
 }
 
 /** AWS Strands Agent wrapper for AG-UI integration. */
@@ -409,19 +372,27 @@ export class StrandsAgent {
   readonly description: string;
   readonly config: StrandsAgentConfig;
 
-  // Template agent configuration for creating fresh per-thread instances.
-  private readonly _templateFields: TemplateAgentCloneFields;
+  /**
+   * Reference to the caller-supplied template Agent. Per-thread agents are
+   * built via `template.clone({...})` when the SDK exposes `clone`, falling
+   * back to a manual rebuild for older SDK versions (see `_buildThreadAgent`).
+   */
+  private readonly _template: StrandsAgentCore | null;
 
   /**
-   * Hook providers forwarded to each per-thread StrandsAgentCore.
+   * Plugin entries forwarded to each per-thread StrandsAgentCore.
    *
    * Taken directly from the caller rather than read off the template because
    * Strands' `Agent.hooks` is a `HookRegistry` containing only registered
    * callbacks — the original list of provider objects is not retained, and
    * the registry also contains callbacks bound to internal Strands objects
    * that must not be cross-wired into per-thread agents.
+   *
+   * Entries may be `Plugin` instances or `() => Plugin` factories; factories
+   * are resolved per-thread inside `_buildThreadAgent` so a stateful plugin
+   * gets a fresh instance for every thread.
    */
-  private readonly _plugins: Plugin[];
+  private readonly _plugins: Array<Plugin | (() => Plugin)>;
 
   private readonly _agentsByThread = new Map<string, StrandsAgentCore>();
   private readonly _proxyToolNamesByThread = new Map<string, Set<string>>();
@@ -471,14 +442,14 @@ export class StrandsAgent {
 
     if (isOrchestrator) {
       this._orchestrator = agent as StrandsOrchestrator;
-      this._templateFields = { model: undefined as never, tools: [] };
+      this._template = null;
       this._plugins = [];
       return;
     }
 
     this._orchestrator = null;
     const agentCore = agent as StrandsAgentCore;
-    this._templateFields = _extractTemplateFields(agentCore);
+    this._template = agentCore;
     this._plugins = plugins ? [...plugins] : [];
 
     // Detect the common pitfall: sessionManager set on the template Agent
@@ -491,27 +462,6 @@ export class StrandsAgent {
           "same session_id. Construct per-thread session managers via " +
           "StrandsAgentConfig.sessionManagerProvider instead.",
       );
-    }
-
-    // Detect unconnected MCP clients passed directly into `tools: [...]`.
-    // Strands resolves a connected `McpClient`'s tools into `agent.tools` at
-    // construction time; an unconnected one stays as the bare client and the
-    // resolved tool list never appears here. The fix is on the caller's
-    // side: `await client.connect()` and spread `await client.listTools()`
-    // into the `tools` array.
-    for (const tool of this._templateFields.tools ?? []) {
-      if (
-        tool != null &&
-        typeof (tool as { connect?: unknown }).connect === "function" &&
-        typeof (tool as { name?: unknown }).name !== "string"
-      ) {
-        this._log.warn(
-          `${LOG_PREFIX} an entry in the template Agent's \`tools\` looks like ` +
-            "an unconnected McpClient — its tools will not be available to the " +
-            "model. Call `await client.connect()` and spread the resolved tool " +
-            "list into `tools: [...]` before constructing the Agent.",
-        );
-      }
     }
   }
 
@@ -672,11 +622,9 @@ export class StrandsAgent {
           // the session owns persistence and seeding on top would duplicate
           // turns.
           const effectiveSeed = sessionManager ? undefined : seedMessages;
-          strandsAgent = new StrandsAgentCore(
-            this._buildThreadAgentConfig(
-              sessionManager ?? undefined,
-              effectiveSeed,
-            ),
+          strandsAgent = this._buildThreadAgent(
+            sessionManager ?? undefined,
+            effectiveSeed,
           );
           this._agentsByThread.set(threadId, strandsAgent);
         }
@@ -2246,34 +2194,84 @@ export class StrandsAgent {
     }
   }
 
-  private _buildThreadAgentConfig(
+  /**
+   * Build a per-thread Strands agent off the template.
+   *
+   * Preferred path: `template.clone({...})`. The SDK's clone() method
+   * captures the original AgentConfig and replays it through the
+   * constructor, which means tool resolution (including unconnected
+   * `McpClient` instances) runs lazily on the clone's first stream — no
+   * `agent.initialize()` call is needed on the template.
+   *
+   * Fallback path: legacy slice-and-rebuild for SDK builds that predate
+   * `Agent.clone`. This forwards the publicly visible template fields
+   * but cannot resolve unconnected MCP clients (the template's
+   * `_mcpClients` is private). Logged once at adapter construction.
+   */
+  private _buildThreadAgent(
     sessionManager?: SessionManager,
     seedMessages?: AgentConfig["messages"],
-  ): AgentConfig {
-    const t = this._templateFields;
+  ): StrandsAgentCore {
+    const template = this._template!;
+    const cloneFn = _getClone(template);
+    if (cloneFn) {
+      const overrides: AdapterCloneOptions["overrides"] = { printer: false };
+      if (sessionManager) overrides.sessionManager = sessionManager;
+      if (seedMessages && seedMessages.length > 0)
+        overrides.messages = seedMessages;
+      const opts: AdapterCloneOptions = { overrides };
+      // Resolve plugin factories per thread so stateful plugins get a fresh
+      // instance and their internal state cannot collide across threads.
+      if (this._plugins.length > 0)
+        opts.additionalPlugins = this._plugins.map((p) =>
+          typeof p === "function" ? p() : p,
+        );
+      return cloneFn(opts);
+    }
+
+    // Legacy fallback for SDKs without `Agent.clone`. Uses the publicly
+    // visible template surface only; unconnected MCP clients passed via
+    // the template's `tools` cannot be recovered here because Strands
+    // routes them into a private `_mcpClients` field at construction time.
+    const t = template as unknown as {
+      model: AgentConfig["model"];
+      tools: NonNullable<AgentConfig["tools"]>;
+      systemPrompt?: AgentConfig["systemPrompt"];
+      name?: string;
+      description?: string;
+      id?: string;
+      appState?: { getAll: () => Record<string, unknown> };
+      modelState?: { getAll: () => Record<string, unknown> };
+      traceAttributes?: AgentConfig["traceAttributes"];
+      structuredOutputSchema?: AgentConfig["structuredOutputSchema"];
+      toolExecutor?: AgentConfig["toolExecutor"];
+    };
     const cfg: AgentConfig = {
       model: t.model,
-      tools: t.tools.slice(),
+      tools: Array.isArray(t.tools) ? t.tools.slice() : [],
       printer: false,
     };
     if (t.systemPrompt !== undefined) cfg.systemPrompt = t.systemPrompt;
     if (t.name !== undefined) cfg.name = t.name;
     if (t.description !== undefined) cfg.description = t.description;
     if (t.id !== undefined) cfg.id = t.id;
-    if (t.appState !== undefined) cfg.appState = t.appState;
-    if (t.modelState !== undefined) cfg.modelState = t.modelState;
+    if (t.appState !== undefined)
+      cfg.appState = t.appState.getAll() as AgentConfig["appState"];
+    if (t.modelState !== undefined)
+      cfg.modelState = t.modelState.getAll() as AgentConfig["modelState"];
+    // Shallow-copy traceAttributes so a mutation on the template's object
+    // (or another thread's) does not leak into this thread's Tracer.
     if (t.traceAttributes !== undefined)
-      cfg.traceAttributes = t.traceAttributes;
+      cfg.traceAttributes = { ...t.traceAttributes };
     if (t.structuredOutputSchema !== undefined)
       cfg.structuredOutputSchema = t.structuredOutputSchema;
     if (t.toolExecutor !== undefined) cfg.toolExecutor = t.toolExecutor;
     if (sessionManager) cfg.sessionManager = sessionManager;
     if (seedMessages && seedMessages.length > 0) cfg.messages = seedMessages;
-    // Only forward plugins when the caller supplied them explicitly. Passing
-    // `plugins: []` risks being interpreted by a future SDK as "disable
-    // default plugins".
-    if (this._plugins.length > 0) cfg.plugins = [...this._plugins];
-    return cfg;
+    // Resolve plugin factories per thread (see _plugins doc).
+    if (this._plugins.length > 0)
+      cfg.plugins = this._plugins.map((p) => (typeof p === "function" ? p() : p));
+    return new StrandsAgentCore(cfg);
   }
 }
 
